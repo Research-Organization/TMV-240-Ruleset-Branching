@@ -1,3 +1,3 @@
 # TMV-240-Ruleset-Branching
 
- - Test direct push on production
+ - Test direct push on prod
