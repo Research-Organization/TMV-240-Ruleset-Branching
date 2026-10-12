@@ -1,0 +1,51 @@
+name: Tier C live-inference injection evaluation
+
+on:
+  # Nightly schedule paused pending the self-hosted-gateway → AWS Bedrock migration
+  # (docs/internal/plan-bedrock-migration.md). This job targets the internal inference
+  # endpoint, so it stays on the self-hosted runner and off the schedule until the
+  # migration lands and the endpoint/runner story is revisited. Re-enable by
+  # uncommenting the schedule below. Manual dispatch remains available in the meantime.
+  # schedule:
+  #   - cron: '47 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  indirect-injection:
+    # Trusted main-branch schedule/manual dispatch only; this never runs on a PR.
+    runs-on: self-hosted
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Evaluate committed attack and benign corpora against real inference
+        env:
+          MOVE_TIER_C_INFERENCE_BASE_URL: ${{ secrets.MOVE_TIER_C_INFERENCE_BASE_URL }}
+          MOVE_TIER_C_INFERENCE_TOKEN: ${{ secrets.MOVE_TIER_C_INFERENCE_TOKEN }}
+          # No TLS_VERIFY escape hatch here: this job carries a bearer token, and a
+          # repository *variable* (unlike a secret) is editable without code review and
+          # could silently downgrade the connection. The CA-bundle variable below is the
+          # only supported way to trust an internal CA.
+          MOVE_TIER_C_INFERENCE_CA_BUNDLE: ${{ vars.MOVE_TIER_C_INFERENCE_CA_BUNDLE }}
+        run: uv run python scripts/tier_c_injection_eval.py
+
+      - name: Upload per-case evaluation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier-c-injection-report
+          path: artifacts/tier-c-injection-report.json
+          if-no-files-found: warn
+          retention-days: 30

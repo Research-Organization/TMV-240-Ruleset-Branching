@@ -1,0 +1,32 @@
+# auto create branch on new issue
+name: CreateBranch
+# controls when the workflow will run
+on:
+  issues:
+    types: [ assigned ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+# all jobs running
+jobs:
+  branch_creation:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issues'
+    steps:
+      # creating branch based on issues
+      - name: creating new branch from assigned issue.
+        uses: Paysley/create-issue-branch@main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      # adding comments to remember team on branch creation
+      - uses: actions/checkout@v3
+      - name: adding comment to created issue.
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ### Branch created!!
+            Please use new branch on previous comment to finish this task.

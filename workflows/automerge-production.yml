@@ -1,0 +1,79 @@
+name: AutoMergeProduction
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Merge release branch to production
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          RELEASE_BRANCH="main"
+          git fetch --tags origin "${RELEASE_BRANCH}" production
+          git checkout -B production origin/production
+
+          BEFORE_SHA="$(git rev-parse HEAD)"
+          MERGED=false
+
+          if git merge-base --is-ancestor "origin/${RELEASE_BRANCH}" HEAD; then
+            echo "production already contains ${RELEASE_BRANCH}"
+          else
+            git merge --no-ff --no-edit "origin/${RELEASE_BRANCH}"
+            MERGED=true
+          fi
+
+          AFTER_SHA="$(git rev-parse HEAD)"
+
+          if [ "${MERGED}" = "true" ]; then
+            echo "===================================="
+            echo "PUSH PRODUCTION"
+            echo "===================================="
+            git push origin HEAD:production
+
+            echo "===================================="
+            echo "TRIGGER PRODUCTION TAG"
+            echo "===================================="
+            gh workflow run autotag-production.yml --ref production
+          fi
+
+          echo "===================================="
+          echo "DONE"
+          echo "===================================="
+          echo "Before SHA: ${BEFORE_SHA}"
+          echo "After SHA : ${AFTER_SHA}"
+          echo "Merged    : ${MERGED}"
