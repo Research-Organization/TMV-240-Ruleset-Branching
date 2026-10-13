@@ -1,0 +1,72 @@
+name: AutoMergeStaging
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+    branches:
+      - develop
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: staging-release
+  cancel-in-progress: false
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Create or update staging promotion PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          RELEASE_BRANCH="develop"
+          TARGET_BRANCH="staging"
+          git fetch origin "${RELEASE_BRANCH}" "${TARGET_BRANCH}"
+
+          AHEAD_COUNT="$(git rev-list --count "origin/${TARGET_BRANCH}".."origin/${RELEASE_BRANCH}")"
+          if [ "${AHEAD_COUNT}" -eq 0 ]; then
+            echo "${TARGET_BRANCH} already contains ${RELEASE_BRANCH}; no PR needed"
+            exit 0
+          fi
+
+          PR_NUMBER="$(gh pr list --base "${TARGET_BRANCH}" --head "${RELEASE_BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          if [ -z "${PR_NUMBER}" ]; then
+            PR_URL="$(gh pr create \
+              --base "${TARGET_BRANCH}" \
+              --head "${RELEASE_BRANCH}" \
+              --title "chore: promote ${RELEASE_BRANCH} to ${TARGET_BRANCH}" \
+              --body "Automated promotion after CI passed on ${RELEASE_BRANCH}.")"
+            PR_NUMBER="${PR_URL##*/}"
+            echo "Created promotion PR #${PR_NUMBER}"
+          else
+            echo "Using existing promotion PR #${PR_NUMBER}"
+          fi
+
+          gh pr merge "${PR_NUMBER}" --auto --merge
+
+      - name: Publish staging to main pull request link
+        run: |
+          set -euo pipefail
+
+          echo "The staging → main promotion remains a manual PR:"
+          echo "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...staging?expand=1"
