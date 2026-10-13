@@ -23,3 +23,7 @@ Enable `Require a pull request before merging` on `staging`, `main`, and
 For a fully automated test, require zero approvals and use the `CI` check as
 the required status check. A production approval requirement will intentionally
 leave the automated production PR waiting for a human approval.
+
+The direct-push test on `production` is intentionally kept as part of the
+simulation checklist. It should be rejected while the production ruleset is
+active.
