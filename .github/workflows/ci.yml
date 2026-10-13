@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  CI:
+    name: CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate promotion workflows use PRs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f .github/workflows/automerge-staging.yml
+          test -f .github/workflows/automerge-production.yml
+
+          grep -q 'gh pr create' .github/workflows/automerge-staging.yml
+          grep -q 'gh pr create' .github/workflows/automerge-production.yml
+
+          if grep -Eq 'git push origin HEAD:(staging|production)' \
+            .github/workflows/automerge-staging.yml \
+            .github/workflows/automerge-production.yml; then
+            echo 'Promotion workflows must not direct-push protected branches.' >&2
+            exit 1
+          fi

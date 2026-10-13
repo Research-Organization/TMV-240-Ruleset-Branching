@@ -1,0 +1,66 @@
+name: AutoMergeProduction
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Create or update production promotion PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          RELEASE_BRANCH="main"
+          TARGET_BRANCH="production"
+          git fetch origin "${RELEASE_BRANCH}" "${TARGET_BRANCH}"
+
+          AHEAD_COUNT="$(git rev-list --count "origin/${TARGET_BRANCH}".."origin/${RELEASE_BRANCH}")"
+          if [ "${AHEAD_COUNT}" -eq 0 ]; then
+            echo "${TARGET_BRANCH} already contains ${RELEASE_BRANCH}; no PR needed"
+            exit 0
+          fi
+
+          PR_NUMBER="$(gh pr list --base "${TARGET_BRANCH}" --head "${RELEASE_BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          if [ -z "${PR_NUMBER}" ]; then
+            PR_URL="$(gh pr create \
+              --base "${TARGET_BRANCH}" \
+              --head "${RELEASE_BRANCH}" \
+              --title "chore: promote ${RELEASE_BRANCH} to ${TARGET_BRANCH}" \
+              --body "Automated promotion after CI passed on ${RELEASE_BRANCH}.")"
+            PR_NUMBER="${PR_URL##*/}"
+            echo "Created promotion PR #${PR_NUMBER}"
+          else
+            echo "Using existing promotion PR #${PR_NUMBER}"
+          fi
+
+          gh pr merge "${PR_NUMBER}" --auto --merge
