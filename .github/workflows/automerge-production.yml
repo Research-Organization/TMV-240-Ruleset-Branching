@@ -10,8 +10,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: write
   contents: write
+  pull-requests: write
 
 concurrency:
   group: production-release
@@ -34,46 +34,33 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Merge release branch to production
+      - name: Create or update production promotion PR
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-
           RELEASE_BRANCH="main"
-          git fetch --tags origin "${RELEASE_BRANCH}" production
-          git checkout -B production origin/production
+          TARGET_BRANCH="production"
+          git fetch origin "${RELEASE_BRANCH}" "${TARGET_BRANCH}"
 
-          BEFORE_SHA="$(git rev-parse HEAD)"
-          MERGED=false
+          AHEAD_COUNT="$(git rev-list --count "origin/${TARGET_BRANCH}".."origin/${RELEASE_BRANCH}")"
+          if [ "${AHEAD_COUNT}" -eq 0 ]; then
+            echo "${TARGET_BRANCH} already contains ${RELEASE_BRANCH}; no PR needed"
+            exit 0
+          fi
 
-          if git merge-base --is-ancestor "origin/${RELEASE_BRANCH}" HEAD; then
-            echo "production already contains ${RELEASE_BRANCH}"
+          PR_NUMBER="$(gh pr list --base "${TARGET_BRANCH}" --head "${RELEASE_BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          if [ -z "${PR_NUMBER}" ]; then
+            PR_URL="$(gh pr create \
+              --base "${TARGET_BRANCH}" \
+              --head "${RELEASE_BRANCH}" \
+              --title "chore: promote ${RELEASE_BRANCH} to ${TARGET_BRANCH}" \
+              --body "Automated promotion after CI passed on ${RELEASE_BRANCH}.")"
+            PR_NUMBER="${PR_URL##*/}"
+            echo "Created promotion PR #${PR_NUMBER}"
           else
-            git merge --no-ff --no-edit "origin/${RELEASE_BRANCH}"
-            MERGED=true
+            echo "Using existing promotion PR #${PR_NUMBER}"
           fi
 
-          AFTER_SHA="$(git rev-parse HEAD)"
-
-          if [ "${MERGED}" = "true" ]; then
-            echo "===================================="
-            echo "PUSH PRODUCTION"
-            echo "===================================="
-            git push origin HEAD:production
-
-            echo "===================================="
-            echo "TRIGGER PRODUCTION TAG"
-            echo "===================================="
-            gh workflow run autotag-production.yml --ref production
-          fi
-
-          echo "===================================="
-          echo "DONE"
-          echo "===================================="
-          echo "Before SHA: ${BEFORE_SHA}"
-          echo "After SHA : ${AFTER_SHA}"
-          echo "Merged    : ${MERGED}"
+          gh pr merge "${PR_NUMBER}" --auto --merge

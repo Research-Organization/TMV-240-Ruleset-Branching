@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: staging-release
@@ -32,55 +33,40 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Merge release branch to staging
+      - name: Create or update staging promotion PR
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-
           RELEASE_BRANCH="develop"
-          git fetch --tags origin "${RELEASE_BRANCH}" staging main
-          git checkout -B staging origin/staging
+          TARGET_BRANCH="staging"
+          git fetch origin "${RELEASE_BRANCH}" "${TARGET_BRANCH}"
 
-          BEFORE_SHA="$(git rev-parse HEAD)"
-          MERGED=false
+          AHEAD_COUNT="$(git rev-list --count "origin/${TARGET_BRANCH}".."origin/${RELEASE_BRANCH}")"
+          if [ "${AHEAD_COUNT}" -eq 0 ]; then
+            echo "${TARGET_BRANCH} already contains ${RELEASE_BRANCH}; no PR needed"
+            exit 0
+          fi
 
-          if git merge-base --is-ancestor "origin/${RELEASE_BRANCH}" HEAD; then
-            echo "staging already contains ${RELEASE_BRANCH}"
+          PR_NUMBER="$(gh pr list --base "${TARGET_BRANCH}" --head "${RELEASE_BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          if [ -z "${PR_NUMBER}" ]; then
+            PR_URL="$(gh pr create \
+              --base "${TARGET_BRANCH}" \
+              --head "${RELEASE_BRANCH}" \
+              --title "chore: promote ${RELEASE_BRANCH} to ${TARGET_BRANCH}" \
+              --body "Automated promotion after CI passed on ${RELEASE_BRANCH}.")"
+            PR_NUMBER="${PR_URL##*/}"
+            echo "Created promotion PR #${PR_NUMBER}"
           else
-            git merge --no-ff --no-edit "origin/${RELEASE_BRANCH}"
-            MERGED=true
+            echo "Using existing promotion PR #${PR_NUMBER}"
           fi
 
-          AFTER_SHA="$(git rev-parse HEAD)"
-
-          if [ "${MERGED}" = "true" ]; then
-            echo "===================================="
-            echo "PUSH STAGING"
-            echo "===================================="
-            git push origin HEAD:staging
-          fi
-
-          echo "===================================="
-          echo "DONE"
-          echo "===================================="
-          echo "Before SHA: ${BEFORE_SHA}"
-          echo "After SHA : ${AFTER_SHA}"
-          echo "Merged    : ${MERGED}"
+          gh pr merge "${PR_NUMBER}" --auto --merge
 
       - name: Publish staging to main pull request link
         run: |
           set -euo pipefail
 
-          git fetch origin staging main
-
-          AHEAD_COUNT="$(git rev-list --count origin/main..origin/staging)"
-          if [ "${AHEAD_COUNT}" -eq 0 ]; then
-            echo "staging has no changes ahead of main; no pull request needed"
-            exit 0
-          fi
-
-          echo "staging has ${AHEAD_COUNT} commit(s) ahead of main."
-          echo "Create the promotion pull request manually:"
+          echo "The staging → main promotion remains a manual PR:"
           echo "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...staging?expand=1"
